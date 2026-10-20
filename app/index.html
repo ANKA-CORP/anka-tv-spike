@@ -127,7 +127,12 @@
     video.addEventListener(ev, function () {
       if (ev === 'waiting') waits++;
       var extra = ev === 'error' && video.error ? ' code ' + video.error.code + ' ' + video.error.message : '';
-      if (ev === 'playing') extra = ' after ' + ((Date.now() - startedAt) / 1000).toFixed(1) + ' s';
+      if (ev === 'playing') {
+        extra = ' after ' + ((Date.now() - startedAt) / 1000).toFixed(1) + ' s';
+        // Start muted so autoplay is allowed, then turn the sound on.
+        video.muted = false;
+        extra += video.muted ? ', still muted' : ', sound on';
+      }
       log('video ' + ev + extra);
     });
   });
