@@ -161,6 +161,8 @@
   var buttons = Array.prototype.slice.call(document.querySelectorAll('#buttons button'));
   buttons.forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.test); }); });
   document.addEventListener('keydown', function (e) {
+    // Back (10009 on the Samsung remote, Backspace on a keyboard) returns to TizenBrew's menu.
+    if (e.keyCode === 10009 || e.keyCode === 8) { reset(); history.back(); e.preventDefault(); return; }
     if (panel.style.display === 'none') { panel.style.display = ''; buttons[0].focus(); e.preventDefault(); return; }
     var i = buttons.indexOf(document.activeElement);
     if (e.keyCode === 39) { buttons[(i + 1) % buttons.length].focus(); e.preventDefault(); }
