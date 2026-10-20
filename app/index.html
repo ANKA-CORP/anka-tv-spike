@@ -112,7 +112,11 @@
     video.play().catch(function () {});
   }
 
-  function run(name) {
+  // A command is "<test>" or "<test> <channel slug>", e.g. "hlsjs-service zeitnot".
+  function run(cmd) {
+    var parts = cmd.split(' ');
+    var name = parts[0];
+    if (parts[1]) slug = parts[1];
     if (!tests[name]) { log('unknown test ' + name); return; }
     if (name !== 'hide') reset();
     log('run ' + name + (slug ? ' (' + slug + ')' : ''));

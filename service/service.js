@@ -4,7 +4,7 @@
 //   GET /top                  slug of the most-watched live channel
 //   GET /master.m3u8?slug=X   the channel's master playlist, with CORS open
 //   POST /log, GET /log       page log lines (readable from the Mac: http://<tv ip>:8085/log)
-//   POST /cmd, GET /cmd       a test name for the page to run (the Mac can drive the tests)
+//   POST /cmd, GET /cmd       "<test> [channel slug]" for the page to run (the Mac can drive the tests)
 var http = require('http');
 var https = require('https');
 var url = require('url');
