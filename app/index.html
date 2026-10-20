@@ -1,0 +1,177 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>anka-tv playback spike</title>
+<style>
+  body { margin: 0; background: #000; color: #eee; font: 22px/1.4 sans-serif; overflow: hidden; }
+  video, #avplay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: #000; }
+  #panel { position: absolute; left: 40px; top: 30px; right: 40px; background: rgba(0, 0, 0, .7); padding: 16px 20px; }
+  #buttons button { font-size: 24px; padding: 10px 18px; margin-right: 12px; background: #333; color: #eee; border: 3px solid transparent; }
+  #buttons button:focus { border-color: #53fc18; outline: none; background: #222; }
+  #stats { margin-top: 10px; color: #53fc18; white-space: pre; }
+  #log { margin-top: 6px; max-height: 300px; overflow: hidden; white-space: pre-wrap; font-size: 18px; }
+</style>
+</head>
+<body>
+<object id="avplay" type="application/avplayer" style="display: none"></object>
+<video id="video" autoplay muted playsinline></video>
+<div id="panel">
+  <div id="buttons">
+    <button data-test="native">1 native video</button>
+    <button data-test="hlsjs-direct">2 hls.js direct</button>
+    <button data-test="hlsjs-service">3 hls.js via service</button>
+    <button data-test="avplay">4 AVPlay</button>
+    <button data-test="hide">hide panel</button>
+  </div>
+  <div id="stats"></div>
+  <div id="log"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script>
+  // The module's service (service/service.js) runs on the TV itself.
+  var SERVICE = 'http://127.0.0.1:8085';
+  var video = document.getElementById('video');
+  var avplayEl = document.getElementById('avplay');
+  var panel = document.getElementById('panel');
+  var logEl = document.getElementById('log');
+  var slug = null;
+  var hls = null, waits = 0, startedAt = 0, usingAvplay = false;
+
+  function log(msg) {
+    var line = new Date().toTimeString().slice(0, 8) + ' ' + msg;
+    logEl.textContent = line + '\n' + logEl.textContent.slice(0, 3000);
+    fetch(SERVICE + '/log', { method: 'POST', body: msg }).catch(function () {});
+  }
+
+  function getSlug() {
+    if (slug) return Promise.resolve(slug);
+    return fetch(SERVICE + '/top').then(function (r) { return r.text(); }).then(function (s) { slug = s; return s; });
+  }
+
+  // The page calls Kick's website endpoint itself: it answers any origin, so this also tests Cloudflare from the TV.
+  function masterUrl() {
+    return getSlug().then(function (s) {
+      return fetch('https://kick.com/api/v2/channels/' + s + '/playback-url').then(function (r) { return r.json(); });
+    }).then(function (j) { return j.data; });
+  }
+
+  function reset() {
+    if (hls) { hls.destroy(); hls = null; }
+    if (usingAvplay) { try { webapis.avplay.stop(); webapis.avplay.close(); } catch (e) {} usingAvplay = false; }
+    avplayEl.style.display = 'none';
+    video.style.display = '';
+    video.removeAttribute('src');
+    video.load();
+    waits = 0;
+    startedAt = Date.now();
+  }
+
+  var tests = {
+    native: function () {
+      return masterUrl().then(function (url) { video.src = url; return video.play(); });
+    },
+    'hlsjs-direct': function () {
+      return masterUrl().then(function (url) { useHls(url); });
+    },
+    'hlsjs-service': function () {
+      return getSlug().then(function (s) { useHls(SERVICE + '/master.m3u8?slug=' + encodeURIComponent(s)); });
+    },
+    avplay: function () {
+      if (!window.webapis || !webapis.avplay) { log('AVPlay: webapis not available in this page'); return Promise.resolve(); }
+      return masterUrl().then(function (url) {
+        video.style.display = 'none';
+        avplayEl.style.display = '';
+        usingAvplay = true;
+        var p = webapis.avplay;
+        p.open(url);
+        p.setDisplayRect(0, 0, 1920, 1080);
+        p.setListener({
+          onbufferingstart: function () { waits++; log('avplay buffering start'); },
+          onbufferingcomplete: function () { log('avplay buffering complete'); },
+          onerror: function (e) { log('avplay error ' + e); },
+          onstreamcompleted: function () { log('avplay stream completed'); }
+        });
+        p.prepareAsync(function () {
+          log('avplay prepared after ' + ((Date.now() - startedAt) / 1000).toFixed(1) + ' s');
+          p.play();
+        }, function (e) { log('avplay prepare failed ' + e); });
+      });
+    },
+    hide: function () { panel.style.display = 'none'; return Promise.resolve(); }
+  };
+
+  function useHls(url) {
+    if (!window.Hls || !Hls.isSupported()) { log('hls.js not supported here'); return; }
+    hls = new Hls({ lowLatencyMode: false });
+    hls.on(Hls.Events.ERROR, function (e, d) { log('hls.js ' + (d.fatal ? 'FATAL ' : '') + d.type + ' ' + d.details + (d.response ? ' http ' + d.response.code : '')); });
+    hls.on(Hls.Events.MANIFEST_PARSED, function (e, d) { log('manifest: ' + d.levels.map(function (l) { return l.height + 'p'; }).join(' ')); });
+    hls.on(Hls.Events.LEVEL_SWITCHED, function (e, d) { log('level -> ' + hls.levels[d.level].height + 'p'); });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    video.play().catch(function () {});
+  }
+
+  function run(name) {
+    if (!tests[name]) { log('unknown test ' + name); return; }
+    if (name !== 'hide') reset();
+    log('run ' + name + (slug ? ' (' + slug + ')' : ''));
+    tests[name]().catch(function (e) { log('error: ' + e); });
+  }
+
+  ['playing', 'waiting', 'stalled', 'error', 'loadedmetadata'].forEach(function (ev) {
+    video.addEventListener(ev, function () {
+      if (ev === 'waiting') waits++;
+      var extra = ev === 'error' && video.error ? ' code ' + video.error.code + ' ' + video.error.message : '';
+      if (ev === 'playing') extra = ' after ' + ((Date.now() - startedAt) / 1000).toFixed(1) + ' s';
+      log('video ' + ev + extra);
+    });
+  });
+
+  function statsLine() {
+    if (usingAvplay) {
+      var p = webapis.avplay;
+      return (slug || '?') + '  AVPlay ' + p.getState() + '  t=' + (p.getCurrentTime() / 1000).toFixed(1) + '  buffering=' + waits;
+    }
+    var q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+    var ahead = video.buffered.length ? video.buffered.end(video.buffered.length - 1) - video.currentTime : 0;
+    return (slug || '?') + '  ' + video.videoWidth + 'x' + video.videoHeight + '  t=' + video.currentTime.toFixed(1) +
+      '  buffer=' + ahead.toFixed(1) + 's  waits=' + waits +
+      (q ? '  dropped=' + q.droppedVideoFrames + '/' + q.totalVideoFrames : '') +
+      (hls && hls.currentLevel >= 0 ? '  level=' + hls.levels[hls.currentLevel].height + 'p' : '');
+  }
+
+  setInterval(function () { document.getElementById('stats').textContent = statsLine(); }, 1000);
+  // Every 10 s the stats also go to the service log, so the Mac can follow playback.
+  setInterval(function () { if (startedAt) log('stats ' + statsLine()); }, 10000);
+  // The Mac can start a test: curl -d native http://<tv ip>:8085/cmd
+  setInterval(function () {
+    fetch(SERVICE + '/cmd').then(function (r) { return r.text(); }).then(function (c) { if (c) run(c); }).catch(function () {});
+  }, 1000);
+
+  var buttons = Array.prototype.slice.call(document.querySelectorAll('#buttons button'));
+  buttons.forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.test); }); });
+  document.addEventListener('keydown', function (e) {
+    if (panel.style.display === 'none') { panel.style.display = ''; buttons[0].focus(); e.preventDefault(); return; }
+    var i = buttons.indexOf(document.activeElement);
+    if (e.keyCode === 39) { buttons[(i + 1) % buttons.length].focus(); e.preventDefault(); }
+    if (e.keyCode === 37) { buttons[(i - 1 + buttons.length) % buttons.length].focus(); e.preventDefault(); }
+  });
+
+  function hello() {
+    log(navigator.userAgent);
+    log('native HLS: "' + video.canPlayType('application/vnd.apple.mpegurl') + '"  MSE 1080p60 H.264: ' +
+        (window.MediaSource ? MediaSource.isTypeSupported('video/mp4; codecs="avc1.64002A,mp4a.40.2"') : 'no MSE') +
+        '  hls.js: ' + (window.Hls ? Hls.version + ' supported=' + Hls.isSupported() : 'not loaded') +
+        '  webapis: ' + typeof window.webapis + '  tizen: ' + typeof window.tizen);
+  }
+
+  // AVPlay lives in Samsung's webapis.js, which packaged apps load from $WEBAPIS; try it, then report what we have.
+  var webapisScript = document.createElement('script');
+  webapisScript.src = '$WEBAPIS/webapis/webapis.js';
+  webapisScript.onload = webapisScript.onerror = hello;
+  document.head.appendChild(webapisScript);
+  buttons[0].focus();
+</script>
+</body>
+</html>

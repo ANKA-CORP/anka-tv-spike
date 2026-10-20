@@ -1,0 +1,10 @@
+{
+  "name": "anka-tv-spike",
+  "version": "0.1.0",
+  "description": "Spike: does a Kick HLS stream play on our Samsung TV through TizenBrew?",
+  "packageType": "app",
+  "appName": "anka-tv spike",
+  "appPath": "app/index.html",
+  "serviceFile": "service/service.js",
+  "keys": []
+}
